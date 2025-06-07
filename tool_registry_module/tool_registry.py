@@ -55,6 +55,26 @@ try:
 except ImportError:
     ToolParam = None
 
+try:
+    import openai
+except ImportError:
+    openai = None
+
+try:
+    import mistralai
+except ImportError:
+    mistralai = None
+
+try:
+    import boto3
+except ImportError:
+    boto3 = None
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
 # Configure logger for this module
 logger = logging.getLogger(__name__)
 
@@ -394,6 +414,12 @@ def build_registry_openai(
     """
     logger.info(f"Building OpenAI tool registry for {len(functions)} functions")
 
+    # Check if OpenAI package is available
+    if openai is None:
+        raise ToolRegistryError(
+            "openai package not installed. Install with: pip install openai"
+        )
+
     registry = OrderedDict()
     processed_count = 0
     skipped_count = 0
@@ -412,11 +438,10 @@ def build_registry_openai(
         # Create OpenAI function format
         openai_function = {
             "type": "function",
-            "function": {
-                "name": func_name,
-                "description": func._description,
-                "parameters": func._input_schema,
-            },
+            "name": func_name,
+            "description": func._description,
+            "parameters": func._input_schema,
+            "strict": True,
         }
 
         # Add to registry
@@ -457,6 +482,12 @@ def build_registry_mistral(
         ```
     """
     logger.info(f"Building Mistral tool registry for {len(functions)} functions")
+
+    # Check if Mistral package is available
+    if mistralai is None:
+        raise ToolRegistryError(
+            "mistralai package not installed. Install with: pip install mistralai"
+        )
 
     registry = OrderedDict()
     processed_count = 0
@@ -522,6 +553,12 @@ def build_registry_bedrock(
     """
     logger.info(f"Building Bedrock tool registry for {len(functions)} functions")
 
+    # Check if boto3 package is available
+    if boto3 is None:
+        raise ToolRegistryError(
+            "boto3 package not installed. Install with: pip install boto3"
+        )
+
     registry = OrderedDict()
     processed_count = 0
     skipped_count = 0
@@ -585,6 +622,12 @@ def build_registry_gemini(
     """
     logger.info(f"Building Gemini tool registry for {len(functions)} functions")
 
+    # Check if Google Generative AI package is available
+    if genai is None:
+        raise ToolRegistryError(
+            "google-generativeai package not installed. Install with: pip install google-generativeai"
+        )
+
     registry = OrderedDict()
     processed_count = 0
     skipped_count = 0
@@ -602,13 +645,9 @@ def build_registry_gemini(
 
         # Create Gemini function format
         gemini_function = {
-            "function_declarations": [
-                {
-                    "name": func_name,
-                    "description": func._description,
-                    "parameters": func._input_schema,
-                }
-            ]
+            "name": func_name,
+            "description": func._description,
+            "parameters": func._input_schema,
         }
 
         # Add to registry
@@ -624,17 +663,6 @@ def build_registry_gemini(
         f"Gemini registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
     )
     return registry
-
-
-# Legacy function name for backward compatibility
-def build_registry_anthropic_tool_registry(
-    functions: list[Callable],
-) -> dict[str, dict[str, Any]]:
-    """Legacy function name. Use build_registry_anthropic() instead."""
-    logger.warning(
-        "build_registry_anthropic_tool_registry is deprecated. Use build_registry_anthropic() instead."
-    )
-    return build_registry_anthropic(functions)
 
 
 def get_tool_info(
@@ -722,7 +750,6 @@ __all__ = [
     "build_registry_mistral",
     "build_registry_bedrock",
     "build_registry_gemini",
-    "build_registry_anthropic_tool_registry",  # Legacy name
     "get_tool_info",
     "validate_registry",
     "ToolRegistryError",
