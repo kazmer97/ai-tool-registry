@@ -19,32 +19,32 @@ Advanced tool registration system for multiple AI providers with automatic schem
 
 ```bash
 # Using UV (recommended)
-uv add tool-registry-module
+uv add ai-tool-registry
 
 # Using pip
-pip install tool-registry-module
+pip install ai-tool-registry
 ```
 
 ### Provider-Specific Installation
 
 ```bash
 # For Anthropic Claude
-uv add tool-registry-module[anthropic]
+uv add ai-tool-registry[anthropic]
 
 # For OpenAI
-uv add tool-registry-module[openai]
+uv add ai-tool-registry[openai]
 
 # For Mistral AI 
-uv add tool-registry-module[mistral]
+uv add ai-tool-registry[mistral]
 
 # For AWS Bedrock
-uv add tool-registry-module[bedrock]
+uv add ai-tool-registry[bedrock]
 
 # For Google Gemini
-uv add tool-registry-module[gemini]
+uv add ai-tool-registry[gemini]
 
 # Install all providers
-uv add tool-registry-module[all]
+uv add ai-tool-registry[all]
 ```
 
 ## Quick Start
