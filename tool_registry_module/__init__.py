@@ -7,16 +7,16 @@ Supports multiple AI providers including Anthropic Claude, OpenAI, Mistral AI, A
 """
 
 from .tool_registry import (
-    tool,
+    ToolRegistryError,
     build_registry_anthropic,
-    build_registry_openai,
-    build_registry_mistral, 
+    build_registry_anthropic_tool_registry,  # Legacy name
     build_registry_bedrock,
     build_registry_gemini,
-    build_registry_anthropic_tool_registry,  # Legacy name
+    build_registry_mistral,
+    build_registry_openai,
     get_tool_info,
+    tool,
     validate_registry,
-    ToolRegistryError,
 )
 
 __version__ = "0.1.0"
@@ -25,7 +25,7 @@ __all__ = [
     "build_registry_anthropic",
     "build_registry_openai",
     "build_registry_mistral",
-    "build_registry_bedrock", 
+    "build_registry_bedrock",
     "build_registry_gemini",
     "build_registry_anthropic_tool_registry",  # Legacy name
     "get_tool_info",

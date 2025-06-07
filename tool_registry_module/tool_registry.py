@@ -43,8 +43,9 @@ Version: 3.0
 import inspect
 import logging
 from collections import OrderedDict
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Type, Union, get_type_hints
+from typing import Any, get_type_hints
 
 from pydantic import create_model
 
@@ -65,8 +66,8 @@ class ToolRegistryError(Exception):
 
 
 def create_schema_from_signature(
-    func: Callable, ignore_in_schema: List[str]
-) -> Dict[str, Any]:
+    func: Callable, ignore_in_schema: list[str]
+) -> dict[str, Any]:
     """
     Create a JSON schema from a function signature using Pydantic models.
 
@@ -119,15 +120,15 @@ def create_schema_from_signature(
 
     # Create temporary Pydantic model for schema generation
     model_name = f"{func.__name__}InputModel"
-    TempModel = create_model(model_name, **fields)
+    temp_model = create_model(model_name, **fields)
 
-    schema = TempModel.model_json_schema()
+    schema = temp_model.model_json_schema()
     logger.debug(f"Generated schema for {func.__name__}: {len(fields)} fields")
 
     return schema
 
 
-def _is_pydantic_model(param_type: Type) -> bool:
+def _is_pydantic_model(param_type: type) -> bool:
     """
     Check if a type is a Pydantic model.
 
@@ -142,7 +143,7 @@ def _is_pydantic_model(param_type: Type) -> bool:
     )
 
 
-def _convert_parameter(param_name: str, param_type: Type, param_value: Any) -> Any:
+def _convert_parameter(param_name: str, param_type: type, param_value: Any) -> Any:
     """
     Convert a parameter value to the expected type.
 
@@ -171,8 +172,8 @@ def _convert_parameter(param_name: str, param_type: Type, param_value: Any) -> A
 
 def tool(
     description: str,
-    cache_control: Optional[Any] = None,
-    ignore_in_schema: Optional[List[str]] = None,
+    cache_control: Any | None = None,
+    ignore_in_schema: list[str] | None = None,
 ) -> Callable:
     """
     Decorator that converts a Python function into an AI provider tool.
@@ -272,8 +273,8 @@ def tool(
 
 
 def build_registry_anthropic(
-    functions: List[Callable],
-) -> Dict[str, Dict[str, Any]]:
+    functions: list[Callable],
+) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Anthropic Claude API.
 
@@ -334,8 +335,10 @@ def build_registry_anthropic(
 
         # Create ToolParam for Anthropic API
         if ToolParam is None:
-            raise ToolRegistryError("anthropic package not installed. Install with: pip install anthropic")
-            
+            raise ToolRegistryError(
+                "anthropic package not installed. Install with: pip install anthropic"
+            )
+
         tool_param = ToolParam(
             name=func_name,
             description=func._description,
@@ -365,8 +368,8 @@ def build_registry_anthropic(
 
 
 def build_registry_openai(
-    functions: List[Callable],
-) -> Dict[str, Dict[str, Any]]:
+    functions: list[Callable],
+) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with OpenAI Function Calling API.
 
@@ -384,7 +387,7 @@ def build_registry_openai(
     Example:
         ```python
         registry = build_registry_openai([add, multiply])
-        
+
         # Use with OpenAI API
         tools = [entry["representation"] for entry in registry.values()]
         ```
@@ -397,7 +400,9 @@ def build_registry_openai(
 
     for func in functions:
         if not hasattr(func, "_input_schema"):
-            logger.warning(f"Skipping function {func.__name__}: not decorated with @tool")
+            logger.warning(
+                f"Skipping function {func.__name__}: not decorated with @tool"
+            )
             skipped_count += 1
             continue
 
@@ -411,7 +416,7 @@ def build_registry_openai(
                 "name": func_name,
                 "description": func._description,
                 "parameters": func._input_schema,
-            }
+            },
         }
 
         # Add to registry
@@ -423,13 +428,15 @@ def build_registry_openai(
         processed_count += 1
         logger.debug(f"Successfully added OpenAI tool to registry: {func_name}")
 
-    logger.info(f"OpenAI registry building completed: {processed_count} tools processed, {skipped_count} functions skipped")
+    logger.info(
+        f"OpenAI registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
+    )
     return registry
 
 
 def build_registry_mistral(
-    functions: List[Callable],
-) -> Dict[str, Dict[str, Any]]:
+    functions: list[Callable],
+) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Mistral AI Function Calling API.
 
@@ -444,7 +451,7 @@ def build_registry_mistral(
     Example:
         ```python
         registry = build_registry_mistral([add, multiply])
-        
+
         # Use with Mistral AI API
         tools = [entry["representation"] for entry in registry.values()]
         ```
@@ -457,7 +464,9 @@ def build_registry_mistral(
 
     for func in functions:
         if not hasattr(func, "_input_schema"):
-            logger.warning(f"Skipping function {func.__name__}: not decorated with @tool")
+            logger.warning(
+                f"Skipping function {func.__name__}: not decorated with @tool"
+            )
             skipped_count += 1
             continue
 
@@ -471,7 +480,7 @@ def build_registry_mistral(
                 "name": func_name,
                 "description": func._description,
                 "parameters": func._input_schema,
-            }
+            },
         }
 
         # Add to registry
@@ -483,13 +492,15 @@ def build_registry_mistral(
         processed_count += 1
         logger.debug(f"Successfully added Mistral tool to registry: {func_name}")
 
-    logger.info(f"Mistral registry building completed: {processed_count} tools processed, {skipped_count} functions skipped")
+    logger.info(
+        f"Mistral registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
+    )
     return registry
 
 
 def build_registry_bedrock(
-    functions: List[Callable],
-) -> Dict[str, Dict[str, Any]]:
+    functions: list[Callable],
+) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with AWS Bedrock Converse API.
 
@@ -504,7 +515,7 @@ def build_registry_bedrock(
     Example:
         ```python
         registry = build_registry_bedrock([add, multiply])
-        
+
         # Use with AWS Bedrock API
         tools = [entry["representation"] for entry in registry.values()]
         ```
@@ -517,7 +528,9 @@ def build_registry_bedrock(
 
     for func in functions:
         if not hasattr(func, "_input_schema"):
-            logger.warning(f"Skipping function {func.__name__}: not decorated with @tool")
+            logger.warning(
+                f"Skipping function {func.__name__}: not decorated with @tool"
+            )
             skipped_count += 1
             continue
 
@@ -529,9 +542,7 @@ def build_registry_bedrock(
             "toolSpec": {
                 "name": func_name,
                 "description": func._description,
-                "inputSchema": {
-                    "json": func._input_schema
-                }
+                "inputSchema": {"json": func._input_schema},
             }
         }
 
@@ -544,13 +555,15 @@ def build_registry_bedrock(
         processed_count += 1
         logger.debug(f"Successfully added Bedrock tool to registry: {func_name}")
 
-    logger.info(f"Bedrock registry building completed: {processed_count} tools processed, {skipped_count} functions skipped")
+    logger.info(
+        f"Bedrock registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
+    )
     return registry
 
 
 def build_registry_gemini(
-    functions: List[Callable],
-) -> Dict[str, Dict[str, Any]]:
+    functions: list[Callable],
+) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Google Gemini Function Calling API.
 
@@ -565,7 +578,7 @@ def build_registry_gemini(
     Example:
         ```python
         registry = build_registry_gemini([add, multiply])
-        
+
         # Use with Google Gemini API
         tools = [entry["representation"] for entry in registry.values()]
         ```
@@ -578,7 +591,9 @@ def build_registry_gemini(
 
     for func in functions:
         if not hasattr(func, "_input_schema"):
-            logger.warning(f"Skipping function {func.__name__}: not decorated with @tool")
+            logger.warning(
+                f"Skipping function {func.__name__}: not decorated with @tool"
+            )
             skipped_count += 1
             continue
 
@@ -587,11 +602,13 @@ def build_registry_gemini(
 
         # Create Gemini function format
         gemini_function = {
-            "function_declarations": [{
-                "name": func_name,
-                "description": func._description,
-                "parameters": func._input_schema,
-            }]
+            "function_declarations": [
+                {
+                    "name": func_name,
+                    "description": func._description,
+                    "parameters": func._input_schema,
+                }
+            ]
         }
 
         # Add to registry
@@ -603,20 +620,26 @@ def build_registry_gemini(
         processed_count += 1
         logger.debug(f"Successfully added Gemini tool to registry: {func_name}")
 
-    logger.info(f"Gemini registry building completed: {processed_count} tools processed, {skipped_count} functions skipped")
+    logger.info(
+        f"Gemini registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
+    )
     return registry
 
 
 # Legacy function name for backward compatibility
-def build_registry_anthropic_tool_registry(functions: List[Callable]) -> Dict[str, Dict[str, Any]]:
+def build_registry_anthropic_tool_registry(
+    functions: list[Callable],
+) -> dict[str, dict[str, Any]]:
     """Legacy function name. Use build_registry_anthropic() instead."""
-    logger.warning("build_registry_anthropic_tool_registry is deprecated. Use build_registry_anthropic() instead.")
+    logger.warning(
+        "build_registry_anthropic_tool_registry is deprecated. Use build_registry_anthropic() instead."
+    )
     return build_registry_anthropic(functions)
 
 
 def get_tool_info(
-    registry: Dict[str, Dict[str, Any]], tool_name: str
-) -> Dict[str, Any]:
+    registry: dict[str, dict[str, Any]], tool_name: str
+) -> dict[str, Any]:
     """
     Get detailed information about a specific tool in the registry.
 
@@ -649,7 +672,7 @@ def get_tool_info(
     }
 
 
-def validate_registry(registry: Dict[str, Dict[str, Any]]) -> bool:
+def validate_registry(registry: dict[str, dict[str, Any]]) -> bool:
     """
     Validate that a tool registry has the correct structure.
 
@@ -695,7 +718,7 @@ def validate_registry(registry: Dict[str, Dict[str, Any]]) -> bool:
 __all__ = [
     "tool",
     "build_registry_anthropic",
-    "build_registry_openai", 
+    "build_registry_openai",
     "build_registry_mistral",
     "build_registry_bedrock",
     "build_registry_gemini",

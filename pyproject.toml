@@ -39,10 +39,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/tool-registry-module"
-Repository = "https://github.com/yourusername/tool-registry-module"
-Documentation = "https://github.com/yourusername/tool-registry-module#readme"
-"Bug Tracker" = "https://github.com/yourusername/tool-registry-module/issues"
+Homepage = "https://github.com/kazmer97/ai-tool-registry"
+Repository = "https://github.com/kazmer97/ai-tool-registry"
+Documentation = "https://github.com/kazmer97/ai-tool-registry#readme"
+"Bug Tracker" = "https://github.com/kazmer97/ai-tool-registry/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -50,3 +50,17 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["tool_registry_module"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.uv.workspace]
+members = ["test-install/test-install"]

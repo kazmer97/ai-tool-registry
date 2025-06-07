@@ -29,22 +29,22 @@ pip install tool-registry-module
 
 ```bash
 # For Anthropic Claude
-uv add "tool-registry-module[anthropic]"
+uv add tool-registry-module[anthropic]
 
 # For OpenAI
-uv add "tool-registry-module[openai]"
+uv add tool-registry-module[openai]
 
 # For Mistral AI 
-uv add "tool-registry-module[mistral]"
+uv add tool-registry-module[mistral]
 
 # For AWS Bedrock
-uv add "tool-registry-module[bedrock]"
+uv add tool-registry-module[bedrock]
 
 # For Google Gemini
-uv add "tool-registry-module[gemini]"
+uv add tool-registry-module[gemini]
 
 # Install all providers
-uv add "tool-registry-module[all]"
+uv add tool-registry-module[all]
 ```
 
 ## Quick Start
@@ -190,7 +190,7 @@ def expensive_function(data: str) -> str:
     return processed_data
 ```
 
-### Registry Utilities
+#### Registry Utilities
 
 ```python
 from tool_registry_module import get_tool_info, validate_registry
@@ -234,6 +234,36 @@ The old `build_registry_anthropic_tool_registry()` function is still available f
 
 MIT License
 
+## Development
+
+### Setup
+
+```bash
+# Clone and install with dev dependencies
+git clone https://github.com/kazmer97/ai-tool-registry.git
+cd ai-tool-registry
+uv sync --extra dev
+
+# Run linting
+uv run ruff check .
+uv run ruff format .
+```
+
+### Testing
+
+```bash
+# Run tests (when available)
+uv run pytest
+
+# Type checking
+uv run mypy tool_registry_module/
+```
+
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Run linting: `uv run ruff check . && uv run ruff format .`
+4. Commit changes (`git commit -m 'Add amazing feature'`)
+5. Push to branch (`git push origin feature/amazing-feature`)
+6. Open a Pull Request
