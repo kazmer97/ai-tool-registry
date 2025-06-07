@@ -203,6 +203,57 @@ print(info["description"])
 is_valid = validate_registry(registry)
 ```
 
+### Tool Use Handling
+
+The registry is a dictionary that enables dynamic function calling for AI tool responses:
+
+```python
+from tool_registry_module import tool, build_registry_anthropic
+
+@tool(description="Add two numbers")
+def add_numbers(a: int, b: int) -> int:
+    return a + b
+
+@tool(description="Get weather info")
+def get_weather(city: str, units: str = "celsius") -> str:
+    return f"Weather in {city}: 22°{units[0].upper()}"
+
+# Build registry
+registry = build_registry_anthropic([add_numbers, get_weather])
+
+# Handle tool use responses dynamically
+def handle_tool_calls(tool_calls, registry):
+    results = []
+    for tool_call in tool_calls:
+        tool_name = tool_call.name
+        tool_args = tool_call.input
+        
+        if tool_name in registry:
+            try:
+                # Get function from registry and execute
+                tool_func = registry[tool_name]["tool"]
+                result = tool_func(**tool_args)
+                results.append({
+                    "tool_use_id": tool_call.id,
+                    "content": str(result)
+                })
+            except Exception as e:
+                results.append({
+                    "tool_use_id": tool_call.id,
+                    "error": f"Error: {e}"
+                })
+        else:
+            results.append({
+                "tool_use_id": tool_call.id,
+                "error": f"Tool '{tool_name}' not found"
+            })
+    
+    return results
+
+# Registry structure: {tool_name: {"tool": callable, "representation": provider_format}}
+# Use registry[tool_name]["tool"] for dynamic function calling
+```
+
 ## Supported Providers
 
 | Provider | Function | Format |
