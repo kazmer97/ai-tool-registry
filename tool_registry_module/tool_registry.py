@@ -45,35 +45,21 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, get_type_hints
+from typing import TYPE_CHECKING, Any, ParamSpec, TypedDict, TypeVar, get_type_hints
 
 from pydantic import create_model
 
-# Optional imports for different providers
-try:
+if TYPE_CHECKING:
     from anthropic.types import ToolParam
-except ImportError:
-    ToolParam = None
 
-try:
-    import openai
-except ImportError:
-    openai = None
+P = ParamSpec("P")
+T = TypeVar("T")
 
-try:
-    import mistralai
-except ImportError:
-    mistralai = None
 
-try:
-    import boto3
-except ImportError:
-    boto3 = None
+class ToolEntry(TypedDict):
+    tool: Callable[..., Any]
+    representation: dict[str, Any]
 
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -86,7 +72,7 @@ class ToolRegistryError(Exception):
 
 
 def create_schema_from_signature(
-    func: Callable, ignore_in_schema: list[str]
+    func: Callable[..., Any], ignore_in_schema: list[str]
 ) -> dict[str, Any]:
     """
     Create a JSON schema from a function signature using Pydantic models.
@@ -118,7 +104,7 @@ def create_schema_from_signature(
     logger.debug(f"Generating schema for function: {func.__name__}")
 
     # Create Pydantic model fields from function parameters
-    fields = {}
+    fields: dict[str, Any] = {}
     for param_name, param in sig.parameters.items():
         # Skip special parameters and ignored parameters
         if param_name in ["args", "kwargs"] + ignore_in_schema:
@@ -175,26 +161,64 @@ def _convert_parameter(param_name: str, param_type: type, param_value: Any) -> A
     Returns:
         The converted parameter value
     """
-    if _is_pydantic_model(param_type):
-        # Handle Pydantic model conversion
-        if param_value is not None and isinstance(param_value, dict):
+    from enum import Enum
+
+    # Handle None values
+    if param_value is None:
+        return param_value
+
+    # Get the origin and args for generic types (e.g., list[ContactInfo])
+    origin = getattr(param_type, "__origin__", None)
+    args = getattr(param_type, "__args__", ())
+
+    # Handle List[PydanticModel]
+    if origin is list and args and _is_pydantic_model(args[0]):
+        model_type = args[0]
+        if isinstance(param_value, list):
+            logger.debug(
+                f"Converting list of dicts to Pydantic models for parameter: {param_name}"
+            )
+            return [
+                model_type(**item) if isinstance(item, dict) else item
+                for item in param_value
+            ]
+        return param_value
+
+    # Handle Pydantic model conversion
+    elif _is_pydantic_model(param_type):
+        if isinstance(param_value, dict):
             logger.debug(
                 f"Converting dict to Pydantic model for parameter: {param_name}"
             )
             return param_type(**param_value)
-        else:
-            # Already instantiated or None
-            return param_value
-    else:
-        # Regular parameter - pass through as-is
         return param_value
+
+    # Handle Enum conversion
+    elif inspect.isclass(param_type) and issubclass(param_type, Enum):
+        if isinstance(param_value, str):
+            logger.debug(f"Converting string to enum for parameter: {param_name}")
+            # Try to create enum from string value
+            try:
+                return param_type(param_value)
+            except ValueError:
+                # If direct value doesn't work, try by name
+                for enum_member in param_type:
+                    if enum_member.name.lower() == param_value.lower():
+                        return enum_member
+                raise ValueError(
+                    f"Invalid enum value '{param_value}' for {param_type.__name__}"
+                )
+        return param_value
+
+    # Regular parameter - pass through as-is
+    return param_value
 
 
 def tool(
     description: str,
     cache_control: Any | None = None,
     ignore_in_schema: list[str] | None = None,
-) -> Callable:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """
     Decorator that converts a Python function into an AI provider tool.
 
@@ -237,7 +261,7 @@ def tool(
     if ignore_in_schema is None:
         ignore_in_schema = []
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         logger.info(f"Registering tool: {func.__name__}")
 
         sig = inspect.signature(func)
@@ -246,45 +270,73 @@ def tool(
         # Generate schema for the function
         input_schema = create_schema_from_signature(func, ignore_in_schema)
 
+        # Pre-compute parameter info for performance
+        convertible_params = {}
+        for param_name in sig.parameters.keys():
+            if param_name not in ["args", "kwargs"]:
+                param_type = hints.get(param_name, Any)
+
+                # Check if parameter needs conversion
+                from enum import Enum
+
+                origin = getattr(param_type, "__origin__", None)
+                args = getattr(param_type, "__args__", ())
+
+                needs_conversion = (
+                    _is_pydantic_model(param_type)  # Pydantic model
+                    or (
+                        origin is list and args and _is_pydantic_model(args[0])
+                    )  # List[PydanticModel]
+                    or (
+                        inspect.isclass(param_type) and issubclass(param_type, Enum)
+                    )  # Enum
+                )
+
+                # Additional check to avoid issues with built-in types
+                if param_type in (int, str, float, bool, type(None)):
+                    needs_conversion = False
+
+                if needs_conversion:
+                    convertible_params[param_name] = param_type
+
         @wraps(func)
-        def wrapper(**kwargs) -> Any:
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             """
             Tool wrapper that handles parameter conversion and validation.
 
             Args:
+                *args: Positional arguments from tool invocation
                 **kwargs: Keyword arguments from tool invocation
 
             Returns:
                 Result from the original function
             """
-            converted_kwargs = {}
+            # Fast path: if no convertible params, pass through directly
+            if not convertible_params:
+                return func(*args, **kwargs)
 
-            # Process each parameter in the function signature
-            for param_name, param in sig.parameters.items():
-                # Skip special parameters
-                if param_name in ["args", "kwargs"]:
-                    continue
+            # Only do expensive binding and conversion if we have convertible params
+            bound_args = sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
 
-                param_type = hints.get(param_name, Any)
-                param_value = kwargs.get(param_name)
+            # Only convert parameters that need conversion
+            for param_name, param_type in convertible_params.items():  # type: ignore
+                if param_name in bound_args.arguments:
+                    param_value = bound_args.arguments[param_name]
+                    bound_args.arguments[param_name] = _convert_parameter(
+                        param_name,
+                        param_type,
+                        param_value,  # type: ignore
+                    )
 
-                # Convert parameter to expected type
-                converted_kwargs[param_name] = _convert_parameter(
-                    param_name, param_type, param_value
-                )
-
-            logger.debug(f"Executing tool: {func.__name__}")
-            result = func(**converted_kwargs)
-            logger.debug(f"Tool execution completed: {func.__name__}")
-
-            return result
+            return func(*bound_args.args, **bound_args.kwargs)
 
         # Attach metadata to the wrapper function
-        wrapper._description = description
-        wrapper._cache_control = cache_control
-        wrapper._input_schema = input_schema
-        wrapper._original_func = func
-        wrapper._ignore_in_schema = ignore_in_schema
+        setattr(wrapper, "_description", description)
+        setattr(wrapper, "_cache_control", cache_control)
+        setattr(wrapper, "_input_schema", input_schema)
+        setattr(wrapper, "_original_func", func)
+        setattr(wrapper, "_ignore_in_schema", ignore_in_schema)
 
         logger.info(f"Successfully registered tool: {func.__name__}")
         return wrapper
@@ -292,8 +344,73 @@ def tool(
     return decorator
 
 
+def _build_registry_base(
+    functions: list[Callable[P, T]],
+    provider_name: str,
+    build_representation_func: Callable[
+        [Callable[..., Any], str], dict[str, Any] | Any
+    ],
+) -> dict[str, dict[str, Any]]:
+    """
+    Base function for building tool registries for any provider.
+
+    Args:
+        functions: List of functions decorated with @tool
+        provider_name: Name of the provider (for logging)
+        build_representation_func: Function to build provider-specific representation
+        check_dependencies_func: Optional function to check provider dependencies
+
+    Returns:
+        Dictionary mapping tool names to their registry entries
+    """
+    logger.info(
+        f"Building {provider_name} tool registry for {len(functions)} functions"
+    )
+
+    registry: OrderedDict[str, dict[str, Any]] = OrderedDict()
+    processed_count = 0
+    skipped_count = 0
+
+    for func in functions:
+        if not hasattr(func, "_input_schema"):
+            logger.warning(
+                f"Skipping function {func.__name__}: not decorated with @tool"
+            )
+            skipped_count += 1
+            continue
+
+        # Use the wrapper function's name (which can be modified) as the primary name
+        func_name = func.__name__
+        logger.debug(f"Processing tool: {func_name}")
+
+        # Check for duplicate function names
+        if func_name in registry:
+            raise ToolRegistryError(
+                f"Duplicate tool name '{func_name}' found. Each tool must have a unique name."
+            )
+
+        representation = build_representation_func(func, func_name)
+
+        registry[func_name] = {
+            "tool": func,
+            "representation": representation,
+        }
+
+        processed_count += 1
+        logger.debug(
+            f"Successfully added {provider_name} tool to registry: {func_name}"
+        )
+
+    logger.info(
+        f"{provider_name} registry building completed: {processed_count} tools processed, "
+        f"{skipped_count} functions skipped"
+    )
+
+    return registry
+
+
 def build_registry_anthropic(
-    functions: list[Callable],
+    functions: list[Callable[P, T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Anthropic Claude API.
@@ -319,11 +436,9 @@ def build_registry_anthropic(
         def add(a: int, b: int) -> int:
             return a + b
 
-
         @tool(description="Multiply two numbers")
         def multiply(a: int, b: int) -> int:
             return a * b
-
 
         registry = build_registry_anthropic([add, multiply])
 
@@ -335,60 +450,33 @@ def build_registry_anthropic(
         Only functions with the @tool decorator will be included in the registry.
         Functions without tool metadata will be silently skipped.
     """
-    logger.info(f"Building tool registry for {len(functions)} functions")
 
-    registry = OrderedDict()
-    processed_count = 0
-    skipped_count = 0
-
-    for func in functions:
-        # Check if function has tool metadata
-        if not hasattr(func, "_input_schema"):
-            logger.warning(
-                f"Skipping function {func.__name__}: not decorated with @tool"
-            )
-            skipped_count += 1
-            continue
-
-        func_name = func._original_func.__name__
-        logger.debug(f"Processing tool: {func_name}")
-
-        # Create ToolParam for Anthropic API
-        if ToolParam is None:
-            raise ToolRegistryError(
-                "anthropic package not installed. Install with: pip install anthropic"
-            )
+    def build_anthropic_representation(
+        func: Callable[..., Any], func_name: str
+    ) -> "ToolParam":
+        from anthropic.types import ToolParam
 
         tool_param = ToolParam(
             name=func_name,
-            description=func._description,
-            input_schema=func._input_schema,
+            description=getattr(func, "_description"),
+            input_schema=getattr(func, "_input_schema"),
         )
 
-        # Add cache control if specified
-        if func._cache_control:
-            tool_param.cache_control = func._cache_control
+        if getattr(func, "_cache_control"):
+            tool_param["cache_control"] = getattr(func, "_cache_control")
             logger.debug(f"Added cache control for tool: {func_name}")
 
-        # Add to registry
-        registry[func_name] = {
-            "tool": func,  # The wrapper function with validation
-            "representation": tool_param,  # Anthropic API representation
-        }
+        return tool_param
 
-        processed_count += 1
-        logger.debug(f"Successfully added tool to registry: {func_name}")
-
-    logger.info(
-        f"Registry building completed: {processed_count} tools processed, "
-        f"{skipped_count} functions skipped"
+    return _build_registry_base(
+        functions,
+        "Anthropic",
+        build_anthropic_representation,
     )
-
-    return registry
 
 
 def build_registry_openai(
-    functions: list[Callable],
+    functions: list[Callable[P, T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with OpenAI Function Calling API.
@@ -412,55 +500,28 @@ def build_registry_openai(
         tools = [entry["representation"] for entry in registry.values()]
         ```
     """
-    logger.info(f"Building OpenAI tool registry for {len(functions)} functions")
 
-    # Check if OpenAI package is available
-    if openai is None:
-        raise ToolRegistryError(
-            "openai package not installed. Install with: pip install openai"
-        )
+    def build_openai_representation(
+        func: Callable[P, T], func_name: str
+    ) -> dict[str, Any]:
+        try:
+            import openai  # type: ignore # noqa: F401
+        except ImportError:
+            pass  # OpenAI not available, but we can still build the representation
 
-    registry = OrderedDict()
-    processed_count = 0
-    skipped_count = 0
-
-    for func in functions:
-        if not hasattr(func, "_input_schema"):
-            logger.warning(
-                f"Skipping function {func.__name__}: not decorated with @tool"
-            )
-            skipped_count += 1
-            continue
-
-        func_name = func._original_func.__name__
-        logger.debug(f"Processing tool: {func_name}")
-
-        # Create OpenAI function format
-        openai_function = {
+        return {
             "type": "function",
             "name": func_name,
-            "description": func._description,
-            "parameters": func._input_schema,
+            "description": getattr(func, "_description"),
+            "parameters": getattr(func, "_input_schema"),
             "strict": True,
         }
 
-        # Add to registry
-        registry[func_name] = {
-            "tool": func,
-            "representation": openai_function,
-        }
-
-        processed_count += 1
-        logger.debug(f"Successfully added OpenAI tool to registry: {func_name}")
-
-    logger.info(
-        f"OpenAI registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
-    )
-    return registry
+    return _build_registry_base(functions, "OpenAI", build_openai_representation)
 
 
 def build_registry_mistral(
-    functions: list[Callable],
+    functions: list[Callable[P, T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Mistral AI Function Calling API.
@@ -481,56 +542,29 @@ def build_registry_mistral(
         tools = [entry["representation"] for entry in registry.values()]
         ```
     """
-    logger.info(f"Building Mistral tool registry for {len(functions)} functions")
 
-    # Check if Mistral package is available
-    if mistralai is None:
-        raise ToolRegistryError(
-            "mistralai package not installed. Install with: pip install mistralai"
-        )
+    def build_mistral_representation(
+        func: Callable[P, T], func_name: str
+    ) -> dict[str, Any]:
+        try:
+            import mistralai  # type: ignore # noqa: F401
+        except ImportError:
+            pass  # Mistral AI not available, but we can still build the representation
 
-    registry = OrderedDict()
-    processed_count = 0
-    skipped_count = 0
-
-    for func in functions:
-        if not hasattr(func, "_input_schema"):
-            logger.warning(
-                f"Skipping function {func.__name__}: not decorated with @tool"
-            )
-            skipped_count += 1
-            continue
-
-        func_name = func._original_func.__name__
-        logger.debug(f"Processing tool: {func_name}")
-
-        # Create Mistral function format (similar to OpenAI)
-        mistral_function = {
+        return {
             "type": "function",
             "function": {
                 "name": func_name,
-                "description": func._description,
-                "parameters": func._input_schema,
+                "description": getattr(func, "_description"),
+                "parameters": getattr(func, "_input_schema"),
             },
         }
 
-        # Add to registry
-        registry[func_name] = {
-            "tool": func,
-            "representation": mistral_function,
-        }
-
-        processed_count += 1
-        logger.debug(f"Successfully added Mistral tool to registry: {func_name}")
-
-    logger.info(
-        f"Mistral registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
-    )
-    return registry
+    return _build_registry_base(functions, "Mistral", build_mistral_representation)
 
 
 def build_registry_bedrock(
-    functions: list[Callable],
+    functions: list[Callable[P, T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with AWS Bedrock Converse API.
@@ -551,55 +585,28 @@ def build_registry_bedrock(
         tools = [entry["representation"] for entry in registry.values()]
         ```
     """
-    logger.info(f"Building Bedrock tool registry for {len(functions)} functions")
 
-    # Check if boto3 package is available
-    if boto3 is None:
-        raise ToolRegistryError(
-            "boto3 package not installed. Install with: pip install boto3"
-        )
+    def build_bedrock_representation(
+        func: Callable[P, T], func_name: str
+    ) -> dict[str, Any]:
+        try:
+            import boto3  # type: ignore  # noqa: F401, I001
+        except ImportError:
+            pass  # Boto3 not available, but we can still build the representation
 
-    registry = OrderedDict()
-    processed_count = 0
-    skipped_count = 0
-
-    for func in functions:
-        if not hasattr(func, "_input_schema"):
-            logger.warning(
-                f"Skipping function {func.__name__}: not decorated with @tool"
-            )
-            skipped_count += 1
-            continue
-
-        func_name = func._original_func.__name__
-        logger.debug(f"Processing tool: {func_name}")
-
-        # Create Bedrock tool format
-        bedrock_tool = {
+        return {
             "toolSpec": {
                 "name": func_name,
-                "description": func._description,
-                "inputSchema": {"json": func._input_schema},
+                "description": getattr(func, "_description"),
+                "inputSchema": {"json": getattr(func, "_input_schema")},
             }
         }
 
-        # Add to registry
-        registry[func_name] = {
-            "tool": func,
-            "representation": bedrock_tool,
-        }
-
-        processed_count += 1
-        logger.debug(f"Successfully added Bedrock tool to registry: {func_name}")
-
-    logger.info(
-        f"Bedrock registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
-    )
-    return registry
+    return _build_registry_base(functions, "Bedrock", build_bedrock_representation)
 
 
 def build_registry_gemini(
-    functions: list[Callable],
+    functions: list[Callable[P, T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Google Gemini Function Calling API.
@@ -620,49 +627,22 @@ def build_registry_gemini(
         tools = [entry["representation"] for entry in registry.values()]
         ```
     """
-    logger.info(f"Building Gemini tool registry for {len(functions)} functions")
 
-    # Check if Google Generative AI package is available
-    if genai is None:
-        raise ToolRegistryError(
-            "google-generativeai package not installed. Install with: pip install google-generativeai"
-        )
+    def build_gemini_representation(
+        func: Callable[P, T], func_name: str
+    ) -> dict[str, Any]:
+        try:
+            import google.generativeai as genai  # type: ignore  # noqa: F401, I001
+        except ImportError:
+            pass  # Google Generative AI not available, but we can still build the representation
 
-    registry = OrderedDict()
-    processed_count = 0
-    skipped_count = 0
-
-    for func in functions:
-        if not hasattr(func, "_input_schema"):
-            logger.warning(
-                f"Skipping function {func.__name__}: not decorated with @tool"
-            )
-            skipped_count += 1
-            continue
-
-        func_name = func._original_func.__name__
-        logger.debug(f"Processing tool: {func_name}")
-
-        # Create Gemini function format
-        gemini_function = {
+        return {
             "name": func_name,
-            "description": func._description,
-            "parameters": func._input_schema,
+            "description": getattr(func, "_description"),
+            "parameters": getattr(func, "_input_schema"),
         }
 
-        # Add to registry
-        registry[func_name] = {
-            "tool": func,
-            "representation": gemini_function,
-        }
-
-        processed_count += 1
-        logger.debug(f"Successfully added Gemini tool to registry: {func_name}")
-
-    logger.info(
-        f"Gemini registry building completed: {processed_count} tools processed, {skipped_count} functions skipped"
-    )
-    return registry
+    return _build_registry_base(functions, "Gemini", build_gemini_representation)
 
 
 def get_tool_info(
@@ -696,7 +676,7 @@ def get_tool_info(
         "schema": wrapper_func._input_schema,
         "cache_control": wrapper_func._cache_control,
         "ignored_parameters": wrapper_func._ignore_in_schema,
-        "original_function": wrapper_func._original_func.__name__,
+        "original_function": getattr(wrapper_func, "_original_func").__name__,
     }
 
 
@@ -729,14 +709,41 @@ def validate_registry(registry: dict[str, dict[str, Any]]) -> bool:
             if not hasattr(tool_func, attr):
                 raise ToolRegistryError(f"Tool '{tool_name}' missing attribute: {attr}")
 
-        # Check representation has required fields (ToolParam is a TypedDict)
+        # Check representation has required fields (varies by provider)
         representation = tool_data["representation"]
-        required_fields = ["name", "description", "input_schema"]
-        for field in required_fields:
-            if field not in representation:
-                raise ToolRegistryError(
-                    f"Tool '{tool_name}' representation missing field: {field}"
-                )
+
+        # Basic validation - must have name and description somewhere
+        has_name = (
+            "name" in representation
+            or (representation.get("function", {}).get("name"))
+            or (representation.get("toolSpec", {}).get("name"))
+        )
+
+        has_description = (
+            "description" in representation
+            or (representation.get("function", {}).get("description"))
+            or (representation.get("toolSpec", {}).get("description"))
+        )
+
+        has_schema = (
+            "input_schema" in representation
+            or "parameters" in representation
+            or (representation.get("function", {}).get("parameters"))
+            or (representation.get("toolSpec", {}).get("inputSchema"))
+        )
+
+        if not has_name:
+            raise ToolRegistryError(
+                f"Tool '{tool_name}' representation missing name field"
+            )
+        if not has_description:
+            raise ToolRegistryError(
+                f"Tool '{tool_name}' representation missing description field"
+            )
+        if not has_schema:
+            raise ToolRegistryError(
+                f"Tool '{tool_name}' representation missing schema field"
+            )
 
     logger.info("Tool registry validation completed successfully")
     return True

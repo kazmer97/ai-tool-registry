@@ -1,4 +1,4 @@
-name: Lint
+name: Pytest
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [ main, develop ]
 
 jobs:
-  lint:
+  test:
     runs-on: ubuntu-latest
     
     steps:
@@ -24,10 +24,7 @@ jobs:
         version: "latest"
     
     - name: Install dependencies
-      run: uv sync --group dev
+      run: uv sync --all-extras
     
     - name: Run ruff check
-      run: uv run ruff check .
-    
-    - name: Run ruff format check
-      run: uv run ruff format --check .
+      run: uv run pytest 
