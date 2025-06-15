@@ -9,11 +9,11 @@ Supports multiple AI providers including Anthropic Claude, OpenAI, Mistral AI, A
 from .tool_registry import (
     ToolRegistryError,
     build_registry_anthropic,
-    build_registry_anthropic_tool_registry,  # Legacy name
     build_registry_bedrock,
     build_registry_gemini,
     build_registry_mistral,
     build_registry_openai,
+    create_schema_from_signature,
     get_tool_info,
     tool,
     validate_registry,
@@ -27,7 +27,7 @@ __all__ = [
     "build_registry_mistral",
     "build_registry_bedrock",
     "build_registry_gemini",
-    "build_registry_anthropic_tool_registry",  # Legacy name
+    "create_schema_from_signature",
     "get_tool_info",
     "validate_registry",
     "ToolRegistryError",
