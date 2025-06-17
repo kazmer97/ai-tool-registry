@@ -150,8 +150,8 @@ class TestPydanticIntegration:
         def validate_contact(contact: ContactInfo) -> str:
             return f"Valid contact: {contact.email}"
 
-        # Test with invalid email (should raise ValidationError during conversion)
-        with pytest.raises(ValidationError):
+        # Test with invalid email (should raise ValueError during conversion)
+        with pytest.raises(ValueError):
             validate_contact(contact={"email": "invalid-email"})
 
     def test_optional_pydantic_fields(self):
@@ -261,7 +261,7 @@ class TestPydanticIntegration:
         def update_task(
             task: Task,
             new_title: str | None = None,
-            add_tags: list[str] = None,
+            add_tags: list[str] | None = None,
             increment_id: bool = False,
         ) -> dict[str, Any]:
             if add_tags is None:

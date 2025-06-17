@@ -23,7 +23,7 @@ def test_duplicate_function_names_raise_error():
         return y * 3
 
     # Manually set the same name to simulate the duplicate issue
-    my_function_2.__name__ = "my_function"
+    setattr(my_function_2, "__name__", "my_function")
     # Also need to update the _original_func name
     setattr(my_function_2, "_original_func", lambda: None)
     getattr(my_function_2, "_original_func").__name__ = "my_function"
@@ -67,7 +67,7 @@ def test_performance_test_scenario_fails():
             return x + y
 
         # This is the problematic part - all functions get the same name
-        dynamic_tool.__name__ = "dynamic_tool"  # Same name for all!
+        setattr(dynamic_tool, "__name__", "dynamic_tool")  # Same name for all!
         tools.append(dynamic_tool)
 
     with patch("tool_registry_module.tool_registry.openai", create=True):
@@ -86,7 +86,7 @@ def test_correct_way_to_create_multiple_tools():
             return x + y
 
         # Give each tool a unique name
-        tool_func.__name__ = f"tool_{i}"
+        setattr(tool_func, "__name__", f"tool_{i}")
         return tool_func
 
     tools = [create_tool(i) for i in range(5)]

@@ -1,6 +1,6 @@
 [project]
 name = "ai-tool-registry"
-version = "0.3.0"
+version = "0.4.0"
 description = "Advanced tool registration system for Anthropic Claude integration with automatic schema generation and validation"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -60,6 +60,9 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["UP007"]
 
 [tool.ruff.format]
 quote-style = "double"
