@@ -24,6 +24,7 @@ from tool_registry_module import (
     tool,
     validate_registry,
 )
+from tool_registry_module.tool_registry import _convert_parameter, _is_pydantic_model
 
 
 class UserData(BaseModel):
@@ -86,7 +87,8 @@ class TestToolDecorator:
         assert result == "Processing Alice, age 30"
 
         # Test with dictionary (should be converted to Pydantic model)
-        result = process_user(user={"name": "Bob", "age": 25})
+        user_dict = {"name": "Bob", "age": 25}
+        result = process_user(user=user_dict)
         assert result == "Processing Bob, age 25"
 
     def test_tool_with_ignored_parameters(self):
@@ -429,7 +431,8 @@ class TestParameterConversion:
             return f"Hello {user.name}"
 
         # Test with dictionary input
-        result = process_user(user={"name": "Alice", "age": 30})
+        user_dict = {"name": "Alice", "age": 30}
+        result = process_user(user=user_dict)
         assert result == "Hello Alice"
 
         # Test with already instantiated model
@@ -455,6 +458,124 @@ class TestParameterConversion:
         # Test mixed
         result = mixed_args(3, "world", c=3.14)
         assert result == "3, world, 3.14"
+
+    def test_convertible_params_optimization(self):
+        """Test that convertible params optimization works correctly."""
+
+        @tool(description="Simple function without complex types")
+        def simple_func(a: int, b: str) -> str:
+            return f"{a}: {b}"
+
+        # Should not trigger complex parameter conversion
+        result = simple_func(42, "test")
+        assert result == "42: test"
+
+        # Verify function has minimal metadata
+        assert hasattr(simple_func, "_input_schema")
+        assert hasattr(simple_func, "_description")
+
+    def test_parameter_binding_with_defaults(self):
+        """Test parameter binding and defaults application."""
+
+        @tool(description="Function with defaults")
+        def func_with_defaults(
+            required: str, optional: int = 10, another_optional: str = "default"
+        ) -> str:
+            return f"{required}-{optional}-{another_optional}"
+
+        # Test with only required parameter
+        result = func_with_defaults("test")
+        assert result == "test-10-default"
+
+        # Test with some optional parameters
+        result = func_with_defaults("hello", 20)
+        assert result == "hello-20-default"
+
+        # Test with all parameters
+        result = func_with_defaults("world", 30, "custom")
+        assert result == "world-30-custom"
+
+
+class TestInternalFunctions:
+    """Test internal helper functions."""
+
+    def test_is_pydantic_model_detection(self):
+        """Test _is_pydantic_model function."""
+
+        # Test with Pydantic model
+        assert _is_pydantic_model(UserData) is True
+
+        # Test with regular class
+        class RegularClass:
+            pass
+
+        assert _is_pydantic_model(RegularClass) is False
+
+        # Test with built-in types
+        assert _is_pydantic_model(str) is False
+        assert _is_pydantic_model(int) is False
+        assert _is_pydantic_model(dict) is False
+
+    def test_convert_parameter_basic_types(self):
+        """Test _convert_parameter with basic types."""
+
+        # Test basic type conversions
+        assert _convert_parameter(int, "42") == 42
+        assert _convert_parameter(float, "3.14") == 3.14
+        assert _convert_parameter(str, 123) == "123"
+        assert _convert_parameter(bool, "true") is True
+
+        # Test None handling
+        assert _convert_parameter(str, None) is None
+        assert _convert_parameter(UserData, None) is None
+
+    def test_convert_parameter_pydantic_model(self):
+        """Test _convert_parameter with Pydantic models."""
+
+        # Test dictionary to Pydantic model conversion
+        user_dict = {"name": "John", "age": 30}
+        result = _convert_parameter(UserData, user_dict)
+        assert isinstance(result, UserData)
+        assert result.name == "John"
+        assert result.age == 30
+
+        # Test passthrough of existing Pydantic model
+        user_model = UserData(name="Alice", age=25)
+        result = _convert_parameter(UserData, user_model)
+        assert result is user_model
+
+    def test_convert_parameter_list_handling(self):
+        """Test _convert_parameter with list types."""
+
+        # Test list of Pydantic models
+        users_data = [{"name": "John", "age": 30}, {"name": "Jane", "age": 25}]
+        result = _convert_parameter(list[UserData], users_data)
+
+        assert len(result) == 2
+        assert all(isinstance(user, UserData) for user in result)
+        assert result[0].name == "John"
+        assert result[1].name == "Jane"
+
+        # Test list without type args
+        simple_list = ["a", "b", "c"]
+        result = _convert_parameter(list, simple_list)
+        assert result == simple_list
+
+    def test_convert_parameter_dict_handling(self):
+        """Test _convert_parameter with dict types."""
+
+        # Test dict with Pydantic model values
+        users_dict = {
+            "user1": {"name": "John", "age": 30},
+            "user2": {"name": "Jane", "age": 25},
+        }
+        result = _convert_parameter(dict[str, UserData], users_dict)
+
+        assert len(result) == 2
+        assert isinstance(result["user1"], UserData)
+        assert isinstance(result["user2"], UserData)
+        assert result["user1"].name == "John"
+        assert result["user2"].name == "Jane"
 
 
 class TestIntegration:
@@ -515,9 +636,8 @@ class TestIntegration:
 
         # Test Pydantic model handling
         user_tool = openai_registry["handle_user"]["tool"]
-        result = user_tool(
-            user={"name": "Charlie", "age": 35, "email": "charlie@test.com"}
-        )
+        user_data = {"name": "Charlie", "age": 35, "email": "charlie@test.com"}
+        result = user_tool(user=user_data)
         assert result["processed"] is True
         assert result["user_name"] == "Charlie"
         assert result["user_age"] == 35
@@ -527,6 +647,8 @@ class TestIntegration:
         add_info = get_tool_info(openai_registry, "add")
         assert add_info["name"] == "add"
         assert add_info["description"] == "Mathematical addition"
+        assert "schema" in add_info
+        assert "original_function" in add_info
 
     @pytest.mark.integration
     def test_schema_validation_with_real_data(self):

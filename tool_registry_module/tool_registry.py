@@ -42,12 +42,21 @@ Version: 3.0
 
 import inspect
 import logging
+import types
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import wraps
-from typing import TYPE_CHECKING, Any, ParamSpec, TypedDict, TypeVar, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ParamSpec,
+    TypedDict,
+    TypeVar,
+    Union,
+    get_type_hints,
+)
 
-from pydantic import create_model
+from pydantic import ValidationError, create_model
 
 if TYPE_CHECKING:
     from anthropic.types import ToolParam
@@ -72,7 +81,7 @@ class ToolRegistryError(Exception):
 
 
 def create_schema_from_signature(
-    func: Callable[..., Any], ignore_in_schema: list[str]
+    func: Callable[..., Any], ignore_in_schema: list[str] | None = None
 ) -> dict[str, Any]:
     """
     Create a JSON schema from a function signature using Pydantic models.
@@ -98,22 +107,22 @@ def create_schema_from_signature(
         # Returns schema for 'name' and 'age' parameters only
         ```
     """
+    if ignore_in_schema is None:
+        ignore_in_schema = []
+
     sig = inspect.signature(func)
     hints = get_type_hints(func)
 
     logger.debug(f"Generating schema for function: {func.__name__}")
 
-    # Create Pydantic model fields from function parameters
     fields: dict[str, Any] = {}
     for param_name, param in sig.parameters.items():
-        # Skip special parameters and ignored parameters
         if param_name in ["args", "kwargs"] + ignore_in_schema:
             logger.debug(f"Skipping parameter: {param_name}")
             continue
 
         param_type = hints.get(param_name, Any)
 
-        # Handle parameters with default values
         if param.default != inspect.Parameter.empty:
             fields[param_name] = (param_type, param.default)
             logger.debug(f"Added optional parameter: {param_name} = {param.default}")
@@ -124,7 +133,6 @@ def create_schema_from_signature(
     if not fields:
         logger.warning(f"No fields found for function {func.__name__}")
 
-    # Create temporary Pydantic model for schema generation
     model_name = f"{func.__name__}InputModel"
     temp_model = create_model(model_name, **fields)
 
@@ -149,7 +157,7 @@ def _is_pydantic_model(param_type: type) -> bool:
     )
 
 
-def _convert_parameter(param_name: str, param_type: type, param_value: Any) -> Any:
+def _convert_parameter(param_type: type, param_value: Any) -> Any:
     """
     Convert a parameter value to the expected type.
 
@@ -167,37 +175,57 @@ def _convert_parameter(param_name: str, param_type: type, param_value: Any) -> A
     if param_value is None:
         return param_value
 
-    # Get the origin and args for generic types (e.g., list[ContactInfo])
     origin = getattr(param_type, "__origin__", None)
     args = getattr(param_type, "__args__", ())
+    last_exception = None
+    if origin is Union or isinstance(param_type, types.UnionType):
+        for union_type in args:
+            if union_type is type(None) and param_value is None:
+                return None
+            # Skip isinstance check for parameterized generics (e.g., list[str])
+            try:
+                if isinstance(param_value, union_type):
+                    return param_value
+            except TypeError:
+                # union_type is a parameterized generic, skip isinstance check
+                pass
 
-    # Handle List[PydanticModel]
-    if origin is list and args and _is_pydantic_model(args[0]):
-        model_type = args[0]
-        if isinstance(param_value, list):
-            logger.debug(
-                f"Converting list of dicts to Pydantic models for parameter: {param_name}"
-            )
+        last_exception = None
+        for union_type in args:
+            if union_type is type(None):
+                continue
+            try:
+                return _convert_parameter(union_type, param_value)
+            except (ValueError, ValidationError, TypeError) as e:
+                last_exception = e
+                continue
+
+        if last_exception:
+            raise last_exception
+
+    if origin is list:
+        if args and isinstance(param_value, list):
+            element_type = args[0]
             return [
-                model_type(**item) if isinstance(item, dict) else item
+                _convert_parameter(param_type=element_type, param_value=item)
                 for item in param_value
             ]
         return param_value
+    if origin is dict:
+        if len(args) == 2 and isinstance(param_value, dict):
+            key_type, val_type = args
+            return {
+                _convert_parameter(
+                    param_type=key_type, param_value=k
+                ): _convert_parameter(param_type=val_type, param_value=v)
+                for k, v in param_value.items()
+            }
 
-    # Handle Pydantic model conversion
-    elif _is_pydantic_model(param_type):
-        if isinstance(param_value, dict):
-            logger.debug(
-                f"Converting dict to Pydantic model for parameter: {param_name}"
-            )
-            return param_type(**param_value)
+    if isinstance(param_value, param_type):
         return param_value
 
-    # Handle Enum conversion
-    elif inspect.isclass(param_type) and issubclass(param_type, Enum):
+    if inspect.isclass(param_type) and issubclass(param_type, Enum):
         if isinstance(param_value, str):
-            logger.debug(f"Converting string to enum for parameter: {param_name}")
-            # Try to create enum from string value
             try:
                 return param_type(param_value)
             except ValueError:
@@ -210,7 +238,21 @@ def _convert_parameter(param_name: str, param_type: type, param_value: Any) -> A
                 )
         return param_value
 
-    # Regular parameter - pass through as-is
+    basic_types = {int: int, float: float, str: str, bool: bool}
+
+    if param_type in basic_types:
+        try:
+            return basic_types[param_type](param_value)
+        except (ValueError, TypeError) as e:
+            raise ValueError(
+                f"Cannot convert {param_value} to {param_type.__name__}: {e}"
+            )
+
+    if _is_pydantic_model(param_type):
+        if isinstance(param_value, param_type):
+            return param_value
+        return param_type(**param_value)
+
     return param_value
 
 
@@ -261,43 +303,14 @@ def tool(
     if ignore_in_schema is None:
         ignore_in_schema = []
 
-    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
         logger.info(f"Registering tool: {func.__name__}")
 
         sig = inspect.signature(func)
         hints = get_type_hints(func)
 
         # Generate schema for the function
-        input_schema = create_schema_from_signature(func, ignore_in_schema)
-
-        # Pre-compute parameter info for performance
-        convertible_params = {}
-        for param_name in sig.parameters.keys():
-            if param_name not in ["args", "kwargs"]:
-                param_type = hints.get(param_name, Any)
-
-                # Check if parameter needs conversion
-                from enum import Enum
-
-                origin = getattr(param_type, "__origin__", None)
-                args = getattr(param_type, "__args__", ())
-
-                needs_conversion = (
-                    _is_pydantic_model(param_type)  # Pydantic model
-                    or (
-                        origin is list and args and _is_pydantic_model(args[0])
-                    )  # List[PydanticModel]
-                    or (
-                        inspect.isclass(param_type) and issubclass(param_type, Enum)
-                    )  # Enum
-                )
-
-                # Additional check to avoid issues with built-in types
-                if param_type in (int, str, float, bool, type(None)):
-                    needs_conversion = False
-
-                if needs_conversion:
-                    convertible_params[param_name] = param_type
+        input_schema = create_schema_from_signature(func, ignore_in_schema or [])
 
         @wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -311,25 +324,27 @@ def tool(
             Returns:
                 Result from the original function
             """
-            # Fast path: if no convertible params, pass through directly
-            if not convertible_params:
-                return func(*args, **kwargs)
 
-            # Only do expensive binding and conversion if we have convertible params
+            # Bind arguments and apply defaults
             bound_args = sig.bind(*args, **kwargs)
             bound_args.apply_defaults()
 
-            # Only convert parameters that need conversion
-            for param_name, param_type in convertible_params.items():  # type: ignore
-                if param_name in bound_args.arguments:
-                    param_value = bound_args.arguments[param_name]
-                    bound_args.arguments[param_name] = _convert_parameter(
-                        param_name,
-                        param_type,
-                        param_value,  # type: ignore
+            # Convert parameters to expected types
+            converted_kwargs = {}
+            for param_name, param_value in bound_args.arguments.items():
+                if param_name in ["args", "kwargs"]:
+                    continue
+                param_type = hints.get(param_name, Any)
+
+                # Skip conversion for Any type to avoid unnecessary processing
+                if param_type is Any:
+                    converted_kwargs[param_name] = param_value
+                else:
+                    converted_kwargs[param_name] = _convert_parameter(
+                        param_type=param_type, param_value=param_value
                     )
 
-            return func(*bound_args.args, **bound_args.kwargs)
+            return func(**converted_kwargs)
 
         # Attach metadata to the wrapper function
         setattr(wrapper, "_description", description)
@@ -344,8 +359,8 @@ def tool(
     return decorator
 
 
-def _build_registry_base(
-    functions: list[Callable[P, T]],
+def _build_registry_base[T](
+    functions: list[Callable[..., T]],
     provider_name: str,
     build_representation_func: Callable[
         [Callable[..., Any], str], dict[str, Any] | Any
@@ -409,8 +424,8 @@ def _build_registry_base(
     return registry
 
 
-def build_registry_anthropic(
-    functions: list[Callable[P, T]],
+def build_registry_anthropic[T](
+    functions: list[Callable[..., T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Anthropic Claude API.
@@ -475,8 +490,8 @@ def build_registry_anthropic(
     )
 
 
-def build_registry_openai(
-    functions: list[Callable[P, T]],
+def build_registry_openai[T](
+    functions: list[Callable[..., T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with OpenAI Function Calling API.
@@ -502,7 +517,7 @@ def build_registry_openai(
     """
 
     def build_openai_representation(
-        func: Callable[P, T], func_name: str
+        func: Callable[..., Any], func_name: str
     ) -> dict[str, Any]:
         try:
             import openai  # type: ignore # noqa: F401
@@ -520,8 +535,8 @@ def build_registry_openai(
     return _build_registry_base(functions, "OpenAI", build_openai_representation)
 
 
-def build_registry_mistral(
-    functions: list[Callable[P, T]],
+def build_registry_mistral[T](
+    functions: list[Callable[..., T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Mistral AI Function Calling API.
@@ -544,7 +559,7 @@ def build_registry_mistral(
     """
 
     def build_mistral_representation(
-        func: Callable[P, T], func_name: str
+        func: Callable[..., Any], func_name: str
     ) -> dict[str, Any]:
         try:
             import mistralai  # type: ignore # noqa: F401
@@ -563,8 +578,8 @@ def build_registry_mistral(
     return _build_registry_base(functions, "Mistral", build_mistral_representation)
 
 
-def build_registry_bedrock(
-    functions: list[Callable[P, T]],
+def build_registry_bedrock[T](
+    functions: list[Callable[..., T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with AWS Bedrock Converse API.
@@ -587,7 +602,7 @@ def build_registry_bedrock(
     """
 
     def build_bedrock_representation(
-        func: Callable[P, T], func_name: str
+        func: Callable[..., Any], func_name: str
     ) -> dict[str, Any]:
         try:
             import boto3  # type: ignore  # noqa: F401, I001
@@ -605,8 +620,8 @@ def build_registry_bedrock(
     return _build_registry_base(functions, "Bedrock", build_bedrock_representation)
 
 
-def build_registry_gemini(
-    functions: list[Callable[P, T]],
+def build_registry_gemini[T](
+    functions: list[Callable[..., T]],
 ) -> dict[str, dict[str, Any]]:
     """
     Build a tool registry compatible with Google Gemini Function Calling API.
@@ -629,7 +644,7 @@ def build_registry_gemini(
     """
 
     def build_gemini_representation(
-        func: Callable[P, T], func_name: str
+        func: Callable[..., Any], func_name: str
     ) -> dict[str, Any]:
         try:
             import google.generativeai as genai  # type: ignore  # noqa: F401, I001
