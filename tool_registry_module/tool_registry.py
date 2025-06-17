@@ -149,68 +149,65 @@ def _is_pydantic_model(param_type: type) -> bool:
     )
 
 
-def _convert_parameter(param_name: str, param_type: type, param_value: Any) -> Any:
-    """
-    Convert a parameter value to the expected type.
+def _convert_parameter(param_type: type, param_value: Any) -> Any:
+    origin = get_origin(param_type)
+    args = get_args(param_type)
+    pyndantic_error = None
+    if origin is Union:
+        for union_type in args:
+            if union_type is type(None) and param_value is None:
+                return None
+            try:
+                return _convert_parameter(
+                    param_value=param_value, param_type=union_type
+                )
+            except ValueError as e:
+                pyndantic_error = e
+                continue
 
-    Args:
-        param_name: Name of the parameter (for error messages)
-        param_type: Expected type of the parameter
-        param_value: The value to convert
+        if isinstance(pyndantic_error, ValueError):
+            raise pyndantic_error
 
-    Returns:
-        The converted parameter value
-    """
-    from enum import Enum
-
-    # Handle None values
-    if param_value is None:
+    # Already correct type
+    if isinstance(param_value, param_type):
         return param_value
 
-    # Get the origin and args for generic types (e.g., list[ContactInfo])
-    origin = getattr(param_type, "__origin__", None)
-    args = getattr(param_type, "__args__", ())
+    # Handle Pydantic models
+    if _is_pydantic_model(param_type) and isinstance(param_value, dict):
+        return param_type(**param_value)
 
-    # Handle List[PydanticModel]
-    if origin is list and args and _is_pydantic_model(args[0]):
-        model_type = args[0]
-        if isinstance(param_value, list):
-            logger.debug(
-                f"Converting list of dicts to Pydantic models for parameter: {param_name}"
-            )
-            return [
-                model_type(**item) if isinstance(item, dict) else item
-                for item in param_value
-            ]
-        return param_value
-
-    # Handle Pydantic model conversion
-    elif _is_pydantic_model(param_type):
-        if isinstance(param_value, dict):
-            logger.debug(
-                f"Converting dict to Pydantic model for parameter: {param_name}"
-            )
-            return param_type(**param_value)
-        return param_value
-
-    # Handle Enum conversion
-    elif inspect.isclass(param_type) and issubclass(param_type, Enum):
+    if inspect.isclass(param_type) and issubclass(param_type, Enum):
         if isinstance(param_value, str):
-            logger.debug(f"Converting string to enum for parameter: {param_name}")
-            # Try to create enum from string value
             try:
                 return param_type(param_value)
             except ValueError:
-                # If direct value doesn't work, try by name
-                for enum_member in param_type:
-                    if enum_member.name.lower() == param_value.lower():
-                        return enum_member
-                raise ValueError(
-                    f"Invalid enum value '{param_value}' for {param_type.__name__}"
-                )
-        return param_value
+                for member in param_type:
+                    if member.name == param_value:
+                        return member
 
-    # Regular parameter - pass through as-is
+    basic_types = {int: int, float: float, str: str, bool: bool}
+
+    if param_type in basic_types:
+        try:
+            return basic_types[param_type](param_value)
+        except (ValueError, TypeError):
+            pass
+
+    # Handle List[T]
+    if origin is list:
+        if args and isinstance(param_value, list):
+            element_type = args[0]
+            return [_convert_parameter(item, element_type) for item in param_value]
+
+    # Handle Dict[K, V]
+    elif origin is dict:
+        if len(args) == 2 and isinstance(param_value, dict):
+            key_type, value_type = args
+            return {
+                _convert_parameter(k, key_type): _convert_parameter(v, value_type)
+                for k, v in [param_value].items()
+            }
+
     return param_value
 
 
