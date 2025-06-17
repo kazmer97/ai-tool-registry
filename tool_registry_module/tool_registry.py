@@ -257,7 +257,7 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
 
 
 def tool(
-    description: str,
+    description: str | None = None,
     cache_control: Any | None = None,
     ignore_in_schema: list[str] | None = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
@@ -346,7 +346,9 @@ def tool(
 
             return func(**converted_kwargs)
 
-        # Attach metadata to the wrapper function
+        func_description = description if description else inspect.getdoc(func)
+        if not func_description:
+            func_description = func.__name__
         setattr(wrapper, "_description", description)
         setattr(wrapper, "_cache_control", cache_control)
         setattr(wrapper, "_input_schema", input_schema)
