@@ -49,20 +49,17 @@ from functools import wraps
 from typing import (
     TYPE_CHECKING,
     Any,
-    ParamSpec,
     TypedDict,
-    TypeVar,
     Union,
     get_type_hints,
 )
 
 from pydantic import ValidationError, create_model
 
+from ._json_schema import InlineDefsJsonSchemaTransformer
+
 if TYPE_CHECKING:
     from anthropic.types import ToolParam
-
-P = ParamSpec("P")
-T = TypeVar("T")
 
 
 class ToolEntry(TypedDict):
@@ -256,7 +253,7 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
     return param_value
 
 
-def tool(
+def tool[T, **P](
     description: str | None = None,
     cache_control: Any | None = None,
     ignore_in_schema: list[str] | None = None,
@@ -297,7 +294,7 @@ def tool(
         ```
 
     Note:
-        The decorator preserves the original function's signature and behavior while
+        The decorator preserves the original function's signature and behaviour while
         adding tool-specific metadata and automatic parameter conversion.
     """
     if ignore_in_schema is None:
@@ -615,7 +612,11 @@ def build_registry_bedrock[T](
             "toolSpec": {
                 "name": func_name,
                 "description": getattr(func, "_description"),
-                "inputSchema": {"json": getattr(func, "_input_schema")},
+                "inputSchema": {
+                    "json": InlineDefsJsonSchemaTransformer(
+                        getattr(func, "_input_schema")
+                    ).walk()
+                },
             }
         }
 
