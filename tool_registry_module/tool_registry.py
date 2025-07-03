@@ -346,7 +346,7 @@ def tool[T, **P](
         func_description = description if description else inspect.getdoc(func)
         if not func_description:
             func_description = func.__name__
-        setattr(wrapper, "_description", description)
+        setattr(wrapper, "_description", func_description)
         setattr(wrapper, "_cache_control", cache_control)
         setattr(wrapper, "_input_schema", input_schema)
         setattr(wrapper, "_original_func", func)
