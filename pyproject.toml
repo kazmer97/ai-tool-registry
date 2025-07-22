@@ -1,11 +1,11 @@
 [project]
 name = "ai-tool-registry"
-version = "0.5.1"
+version = "0.5.2"
 description = "Advanced tool registration system for Anthropic Claude integration with automatic schema generation and validation"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
-    {name = "Claude Code Assistant", email = "noreply@anthropic.com"}
+    {name = "Kazmer, Nagy-Betegh", email = "kazmer.nb@gmail.com"}
 ]
 license = {text = "MIT"}
 keywords = ["anthropic", "claude", "tools", "schema", "validation", "api"]

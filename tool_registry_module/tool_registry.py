@@ -52,6 +52,7 @@ from typing import (
     TypedDict,
     Union,
     get_type_hints,
+    overload,
 )
 
 from pydantic import ValidationError, create_model
@@ -253,11 +254,26 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
     return param_value
 
 
+@overload
+def tool[T, **P](func: Callable[P, T]) -> Callable[P, T]: ...
+
+
+@overload
 def tool[T, **P](
+    *,
     description: str | None = None,
     cache_control: Any | None = None,
     ignore_in_schema: list[str] | None = None,
-) -> Callable[[Callable[P, T]], Callable[P, T]]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+
+
+def tool[T, **P](
+    func: Callable[P, T] | None = None,
+    *,
+    description: str | None = None,
+    cache_control: Any | None = None,
+    ignore_in_schema: list[str] | None = None,
+) -> Callable[[Callable[P, T]], Callable[P, T]] | Callable[P, T]:
     """
     Decorator that converts a Python function into an AI provider tool.
 
@@ -354,6 +370,9 @@ def tool[T, **P](
 
         logger.info(f"Successfully registered tool: {func.__name__}")
         return wrapper
+
+    if func is not None:
+        return decorator(func)
 
     return decorator
 
