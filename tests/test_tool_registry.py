@@ -495,6 +495,29 @@ class TestParameterConversion:
         result = func_with_defaults("world", 30, "custom")
         assert result == "world-30-custom"
 
+    def test_extra_kwargs_handling(self):
+        """Test that extra kwargs are filtered out and don't cause failures."""
+
+        @tool(description="Function that should ignore extra kwargs")
+        def simple_func(name: str, age: int = 25) -> str:
+            return f"Hello {name}, you are {age} years old"
+
+        # Test normal usage
+        result = simple_func("Alice", age=30)
+        assert result == "Hello Alice, you are 30 years old"
+
+        # Test with extra kwargs (should be ignored)
+        result = simple_func("Bob", age=35, extra_param="ignored", another_param=42)
+        assert result == "Hello Bob, you are 35 years old"
+
+        # Test with only extra kwargs for optional params (should use defaults)
+        result = simple_func("Charlie", extra_param="ignored")
+        assert result == "Hello Charlie, you are 25 years old"
+
+        # Test with mixed positional and extra kwargs
+        result = simple_func("David", 40, extra_param="ignored", debug=True)
+        assert result == "Hello David, you are 40 years old"
+
 
 class TestInternalFunctions:
     """Test internal helper functions."""
