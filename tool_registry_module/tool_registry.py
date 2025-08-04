@@ -338,8 +338,12 @@ def tool[T, **P](
                 Result from the original function
             """
 
+            # Filter kwargs to only include parameters that the function accepts
+            valid_params = set(sig.parameters.keys())
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_params}
+
             # Bind arguments and apply defaults
-            bound_args = sig.bind(*args, **kwargs)
+            bound_args = sig.bind(*args, **filtered_kwargs)
             bound_args.apply_defaults()
 
             # Convert parameters to expected types
