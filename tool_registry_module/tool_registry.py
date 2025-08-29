@@ -48,9 +48,12 @@ from collections.abc import Callable
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     TypedDict,
     Union,
+    get_args,
+    get_origin,
     get_type_hints,
     overload,
 )
@@ -58,6 +61,7 @@ from typing import (
 from pydantic import ValidationError, create_model
 
 from ._json_schema import InlineDefsJsonSchemaTransformer
+from .tool_context_type import _is_tool_context_param
 
 if TYPE_CHECKING:
     from anthropic.types import ToolParam
@@ -109,7 +113,7 @@ def create_schema_from_signature(
         ignore_in_schema = []
 
     sig = inspect.signature(func)
-    hints = get_type_hints(func)
+    hints = get_type_hints(func, include_extras=True)
 
     logger.debug(f"Generating schema for function: {func.__name__}")
 
@@ -120,6 +124,11 @@ def create_schema_from_signature(
             continue
 
         param_type = hints.get(param_name, Any)
+
+        # Skip ToolContext parameters
+        if _is_tool_context_param(param_type):
+            logger.debug(f"Skipping ToolContext parameter: {param_name}")
+            continue
 
         if param.default != inspect.Parameter.empty:
             fields[param_name] = (param_type, param.default)
@@ -172,8 +181,14 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
     # Handle None values
     if param_value is None:
         return param_value
+    origin = get_origin(param_type)
+    if origin is Annotated:
+        param_type = get_args(param_type)[0]
+        origin = get_origin(param_type)
 
-    origin = getattr(param_type, "__origin__", None)
+    if origin is None:
+        origin = getattr(param_type, "__origin__", None)
+
     args = getattr(param_type, "__args__", ())
     last_exception = None
     if origin is Union or isinstance(param_type, types.UnionType):
@@ -320,7 +335,7 @@ def tool[T, **P](
         logger.info(f"Registering tool: {func.__name__}")
 
         sig = inspect.signature(func)
-        hints = get_type_hints(func)
+        hints = get_type_hints(func, include_extras=True)
 
         # Generate schema for the function
         input_schema = create_schema_from_signature(func, ignore_in_schema or [])
@@ -354,7 +369,7 @@ def tool[T, **P](
                 param_type = hints.get(param_name, Any)
 
                 # Skip conversion for Any type to avoid unnecessary processing
-                if param_type is Any:
+                if param_type is Any or _is_tool_context_param(param=param_type):
                     converted_kwargs[param_name] = param_value
                 else:
                     converted_kwargs[param_name] = _convert_parameter(
