@@ -7,7 +7,8 @@ Advanced tool registration system for multiple AI providers with automatic schem
 - **Multi-provider support** - Works with all major AI providers
 - **Automatic JSON schema generation** from function signatures
 - **Pydantic model integration** and validation
-- **Parameter filtering** for internal/context parameters
+- **ToolContext parameter filtering** - Automatic exclusion of context parameters with type safety
+- **Legacy parameter filtering** for internal/context parameters
 - **Unified interface** across different AI providers
 - **Comprehensive error handling** and logging
 - **Type safety** with full type hints
@@ -50,8 +51,9 @@ uv add ai-tool-registry[all]
 ## Quick Start
 
 ```python
-from tool_registry_module import tool, build_registry_openai, build_registry_anthropic
+from tool_registry_module import tool, build_registry_openai, build_registry_anthropic, ToolContext
 from pydantic import BaseModel
+from typing import Annotated
 
 
 class UserData(BaseModel):
@@ -60,7 +62,11 @@ class UserData(BaseModel):
 
 
 @tool(description="Process user information")
-def process_user(input: UserData, context: str = "default") -> UserData:
+def process_user(
+    input: UserData, 
+    context: ToolContext[dict] = None  # Automatically excluded from schema
+) -> UserData:
+    # context parameter is available for use but won't appear in AI tool schema
     return input
 
 
@@ -163,7 +169,76 @@ client = MistralClient()
 
 ### Parameter Filtering
 
-Exclude internal parameters from the schema:
+#### Using ToolContext (Recommended)
+
+Use `ToolContext` to mark parameters that should be automatically excluded from schemas:
+
+```python
+from tool_registry_module import tool, ToolContext
+from typing import Annotated
+
+@tool(description="Process user data with context")
+def process_data(
+    user_input: str,
+    context: ToolContext[dict],  # Direct ToolContext generic
+    session: Annotated[str, ToolContext],  # Annotated ToolContext
+    debug_flag: bool = False
+) -> str:
+    # context and session parameters are automatically excluded from the schema
+    # but available for use in your function
+    return f"Processed: {user_input}"
+```
+
+**ToolContext Features:**
+- **Automatic exclusion** - No need to manually specify `ignore_in_schema`
+- **Type safety** - Full type hints with generic support
+- **Reference preservation** - Objects maintain their references for mutation within functions
+- **Multiple forms** - Both direct (`ToolContext[T]`) and annotated (`Annotated[T, ToolContext]`) syntax
+- **Union validation** - Prevents incorrect usage in union types
+
+**Supported ToolContext patterns:**
+```python
+# Direct generic types
+param1: ToolContext[dict]
+param2: ToolContext[str] 
+
+# Annotated types
+param3: Annotated[str, ToolContext]
+param4: Annotated[dict, ToolContext, "description"]
+
+# Union types will raise TypeError (prevented for safety)
+# param5: Union[str, ToolContext[dict]]  # ❌ Not allowed
+```
+
+**Reference Preservation Example:**
+```python
+from tool_registry_module import tool, ToolContext
+
+# Context objects maintain their references for mutation
+@tool(description="Track user interactions")
+def track_interaction(
+    action: str,
+    user_context: ToolContext[dict]  # This dict can be modified
+) -> str:
+    # Modify the context object - changes persist outside function
+    user_context["actions"] = user_context.get("actions", [])
+    user_context["actions"].append(action)
+    user_context["last_action"] = action
+    return f"Tracked: {action}"
+
+# Usage
+context = {"user_id": "123"}
+track_interaction("login", user_context=context)
+track_interaction("view_profile", user_context=context)
+
+# Context object is modified:
+print(context)  
+# {'user_id': '123', 'actions': ['login', 'view_profile'], 'last_action': 'view_profile'}
+```
+
+#### Legacy Parameter Filtering
+
+You can still manually exclude parameters using `ignore_in_schema`:
 
 ```python
 @tool(
