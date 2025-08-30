@@ -1,6 +1,6 @@
 [project]
 name = "ai-tool-registry"
-version = "0.7.0"
+version = "0.7.1"
 description = "Advanced tool registration system for Anthropic Claude integration with automatic schema generation and validation"
 readme = "README.md"
 requires-python = ">=3.12"
