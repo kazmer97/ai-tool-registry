@@ -239,9 +239,6 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
         if isinstance(param_value, param_type):
             return param_value
 
-    if isinstance(param_value, param_type):
-        return param_value
-
     if inspect.isclass(param_type) and issubclass(param_type, Enum):
         if isinstance(param_value, str):
             try:
@@ -267,8 +264,10 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
             )
 
     if _is_pydantic_model(param_type):
-        if isinstance(param_value, param_type):
-            return param_value
+        # Only use isinstance for concrete types, not parameterized generics
+        if get_origin(param_type) is None and not hasattr(param_type, "__args__"):
+            if isinstance(param_value, param_type):
+                return param_value
         return param_type(**param_value)
 
     return param_value
@@ -373,8 +372,12 @@ def tool[T, **P](
                     continue
                 param_type = hints.get(param_name, Any)
 
-                # Skip conversion for Any type to avoid unnecessary processing
-                if param_type is Any or _is_tool_context_param(param=param_type):
+                # Skip conversion for parameters that should be ignored or are ToolContext
+                if (
+                    param_type is Any
+                    or _is_tool_context_param(param=param_type)
+                    or param_name in (ignore_in_schema or [])
+                ):
                     converted_kwargs[param_name] = param_value
                 else:
                     converted_kwargs[param_name] = _convert_parameter(
