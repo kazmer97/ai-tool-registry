@@ -6,12 +6,14 @@ nested types including unions with BaseModel, str, None and dictionaries
 with mixed value types.
 """
 
+from collections.abc import Callable
 from enum import Enum
-from typing import Union
+from typing import Annotated, Union
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from tool_registry_module.tool_context_type import ToolContext
 from tool_registry_module.tool_registry import _convert_parameter
 
 
@@ -250,6 +252,49 @@ class TestConvertParameter:
         """Test that conversion errors are properly propagated."""
         with pytest.raises(ValueError):
             _convert_parameter(int, "not_a_number")
+
+    def test_parameterized_generic_isinstance_fix(self):
+        """Test that parameterized generics don't cause isinstance errors."""
+        # Test Annotated types (like Annotated[UserModel, ToolContext])
+        user_data = {"name": "John", "age": 30}
+        annotated_type = Annotated[UserModel, ToolContext]
+
+        # This should not raise "isinstance() argument 2 cannot be a parameterized generic"
+        result = _convert_parameter(annotated_type, user_data)
+        assert isinstance(result, UserModel)
+        assert result.name == "John"
+        assert result.age == 30
+
+    def test_callable_union_type_conversion(self):
+        """Test Callable[[int, int], None] | None type doesn't cause isinstance errors."""
+        # Test with None value
+        callable_union_type = Callable[[int, int], None] | None
+        result = _convert_parameter(callable_union_type, None)
+        assert result is None
+
+        # Test with actual callable
+        def test_callback(x: int, y: int) -> None:
+            pass
+
+        result = _convert_parameter(callable_union_type, test_callback)
+        assert result is test_callback
+
+    def test_complex_parameterized_generics(self):
+        """Test various parameterized generics that previously caused isinstance errors."""
+        # Test list[UserModel] with UserModel instances (should pass through)
+        user = UserModel(name="Alice", age=25)
+        result = _convert_parameter(list[UserModel], [user])
+        assert result == [user]
+
+        # Test dict[str, UserModel] with UserModel instances (should pass through)
+        user_dict = {"user1": user}
+        result = _convert_parameter(dict[str, UserModel], user_dict)
+        assert result == user_dict
+
+        # Test Union with parameterized generics
+        union_type = list[UserModel] | str
+        result = _convert_parameter(union_type, "test string")
+        assert result == "test string"
 
 
 if __name__ == "__main__":
