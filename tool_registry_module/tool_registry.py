@@ -216,7 +216,7 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
         if last_exception:
             raise last_exception
 
-    if origin is list:
+    elif origin is list:
         if args and isinstance(param_value, list):
             element_type = args[0]
             return [
@@ -224,7 +224,7 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
                 for item in param_value
             ]
         return param_value
-    if origin is dict:
+    elif origin is dict:
         if len(args) == 2 and isinstance(param_value, dict):
             key_type, val_type = args
             return {
@@ -233,6 +233,11 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
                 ): _convert_parameter(param_type=val_type, param_value=v)
                 for k, v in param_value.items()
             }
+
+        # Only use isinstance for concrete types, not parameterized generics
+    if get_origin(param_type) is None and not hasattr(param_type, "__args__"):
+        if isinstance(param_value, param_type):
+            return param_value
 
     if isinstance(param_value, param_type):
         return param_value
