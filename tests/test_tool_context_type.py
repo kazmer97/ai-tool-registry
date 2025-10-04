@@ -195,7 +195,6 @@ class TestToolContextIntegration:
 
     def test_mixed_parameter_types(self):
         """Test function with mix of regular, optional, and ToolContext parameters."""
-        from typing import Optional
 
         from tool_registry_module import tool
 
@@ -204,8 +203,8 @@ class TestToolContextIntegration:
             required: str,
             context: ToolContext[dict],
             annotated_context: Annotated[int, ToolContext, "context param"],
-            optional: Optional[int] = None,
-            annotated_optional: Annotated[Optional[str], "description"] = None,
+            optional: int | None = None,
+            annotated_optional: Annotated[str | None, "description"] = None,
         ) -> str:
             return "test"
 
@@ -371,7 +370,6 @@ class TestToolContextIntegration:
 
     def test_tool_context_mixed_parameters_reference_preservation(self):
         """Test reference preservation with mixed parameter types."""
-        from typing import Optional
 
         from tool_registry_module import tool
 
@@ -379,7 +377,7 @@ class TestToolContextIntegration:
         def complex_function_with_context(
             required_param: str,
             context: ToolContext[dict],
-            optional_param: Optional[int] = None,
+            optional_param: int | None = None,
             annotated_context: Annotated[list, ToolContext] = None,
         ) -> dict:
             # Modify both context objects
