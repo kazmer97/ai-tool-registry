@@ -12,7 +12,9 @@ class ToolContext[T]:
     This is a generic type to mark a tool context variable in function inputs that will be ignored by the tool decorator
     """
 
-    pass
+    def __getattr__(self, name: str) -> T:
+        """Type checking helper for accessing context attributes."""
+        ...
 
 
 class RunContext[T](ToolContext[T]):

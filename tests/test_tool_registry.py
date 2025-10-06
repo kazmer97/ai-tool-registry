@@ -236,7 +236,17 @@ class TestRegistryBuilders:
             def __init__(self, **kwargs):
                 super().__init__(kwargs)
 
-        with patch("anthropic.types.ToolParam", MockToolParam):
+        import types as types_module
+
+        anthropic_mock = types_module.ModuleType("anthropic")
+        anthropic_types_mock = types_module.ModuleType("anthropic.types")
+        anthropic_types_mock.ToolParam = MockToolParam
+        anthropic_mock.types = anthropic_types_mock
+
+        with patch.dict(
+            "sys.modules",
+            {"anthropic": anthropic_mock, "anthropic.types": anthropic_types_mock},
+        ):
             registry = build_registry_anthropic(self.test_tools)
 
             assert len(registry) == 3
@@ -642,7 +652,17 @@ class TestIntegration:
             def __init__(self, **kwargs):
                 super().__init__(kwargs)
 
-        with patch("anthropic.types.ToolParam", MockToolParam):
+        import types as types_module
+
+        anthropic_mock = types_module.ModuleType("anthropic")
+        anthropic_types_mock = types_module.ModuleType("anthropic.types")
+        anthropic_types_mock.ToolParam = MockToolParam
+        anthropic_mock.types = anthropic_types_mock
+
+        with patch.dict(
+            "sys.modules",
+            {"anthropic": anthropic_mock, "anthropic.types": anthropic_types_mock},
+        ):
             anthropic_registry = build_registry_anthropic(tools)
 
         # Validate registries
