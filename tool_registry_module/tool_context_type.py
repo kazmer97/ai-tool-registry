@@ -34,7 +34,26 @@ class RunContext[T](ToolContext[T]):
             return f"Processed: {user_id}"
     """
 
-    pass
+    @property
+    def deps(self) -> T:
+        """
+        PydanticAI compatibility property.
+
+        In PydanticAI, context is accessed via ctx.deps.attribute_name.
+        This property makes that pattern work by returning the context itself.
+
+        At runtime, since the actual context object (type T) is passed to the tool,
+        this property returns 'self', which IS the context object.
+
+        Example:
+            @tool
+            def my_tool(ctx: RunContext[UserContext]) -> str:
+                # Both of these work identically:
+                name1 = ctx.deps.username  # PydanticAI style
+                name2 = ctx.username        # Direct style
+                return name1
+        """
+        return self  # pyright: ignore[reportReturnType]
 
 
 Ctx = RunContext
