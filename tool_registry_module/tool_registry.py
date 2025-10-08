@@ -166,7 +166,9 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
         for union_type in args:
             if union_type is type(None) and param_value is None:
                 return None
-            # Skip isinstance check for parameterized generics (e.g., list[str])
+            # Skip isinstance check for Any and parameterized generics
+            if union_type is Any:
+                return param_value  # Any accepts all values
             try:
                 if isinstance(param_value, union_type):
                     return param_value
@@ -207,8 +209,14 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
 
         # Only use isinstance for concrete types, not parameterized generics
     if get_origin(param_type) is None and not hasattr(param_type, "__args__"):
-        if isinstance(param_value, param_type):
-            return param_value
+        if param_type is Any:
+            return param_value  # Any accepts all values
+        try:
+            if isinstance(param_value, param_type):
+                return param_value
+        except TypeError:
+            # Handle special forms that aren't valid isinstance targets
+            pass
 
     if inspect.isclass(param_type) and issubclass(param_type, Enum):
         if isinstance(param_value, str):
