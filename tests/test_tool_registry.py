@@ -6,11 +6,12 @@ including schema generation, parameter validation, and multi-provider support.
 """
 
 import inspect
-from typing import Any
+from enum import Enum
+from typing import Annotated, Any, Literal
 from unittest.mock import patch
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 
 from tool_registry_module import (
     ToolRegistryError,
@@ -51,11 +52,15 @@ class TestToolDecorator:
         assert hasattr(add_numbers, "_original_func")
         assert hasattr(add_numbers, "_cache_control")
         assert hasattr(add_numbers, "_ignore_in_schema")
+        assert hasattr(add_numbers, "_validation_mode")
+        assert hasattr(add_numbers, "_strict_validation")
 
         # Check metadata values
         assert getattr(add_numbers, "_description") == "Add two numbers"
         assert getattr(add_numbers, "_cache_control") is None
         assert getattr(add_numbers, "_ignore_in_schema") == []
+        assert getattr(add_numbers, "_validation_mode") == "compat"
+        assert getattr(add_numbers, "_strict_validation") is False
 
         # Test function still works
         result = add_numbers(5, 3)
@@ -137,6 +142,81 @@ class TestToolDecorator:
         # Check that original function is accessible
         original = getattr(original_function, "_original_func")
         assert original.__name__ == "original_function"
+
+    def test_tool_with_pydantic_validation_mode(self):
+        """Test opt-in Pydantic runtime semantics."""
+
+        class Priority(str, Enum):
+            HIGH = "high"
+            LOW = "low"
+
+        @tool(description="Set priority", validation_mode="pydantic")
+        def set_priority(priority: Priority) -> str:
+            return priority.value
+
+        assert set_priority(priority="high") == "high"
+        with pytest.raises(ValidationError):
+            set_priority(priority="HIGH")
+
+    def test_tool_with_strict_validation(self):
+        """Test strict validation in pydantic mode."""
+
+        @tool(description="Increment", validation_mode="pydantic")
+        def increment_non_strict(value: int) -> int:
+            return value + 1
+
+        @tool(
+            description="Increment strict",
+            validation_mode="pydantic",
+            strict_validation=True,
+        )
+        def increment_strict(value: int) -> int:
+            return value + 1
+
+        assert increment_non_strict(value="1") == 2
+        with pytest.raises(ValidationError):
+            increment_strict(value="1")
+
+    def test_tool_with_discriminated_union_pydantic_models(self):
+        """Test pydantic mode with discriminated union model inputs."""
+
+        class EmailPayload(BaseModel):
+            kind: Literal["email"]
+            address: str
+
+        class SmsPayload(BaseModel):
+            kind: Literal["sms"]
+            phone: str
+
+        @tool(description="Dispatch message", validation_mode="pydantic")
+        def dispatch(
+            payload: Annotated[
+                EmailPayload | SmsPayload,
+                Field(discriminator="kind"),
+            ],
+        ) -> str:
+            if isinstance(payload, EmailPayload):
+                return payload.address
+            return payload.phone
+
+        email_payload: Any = {"kind": "email", "address": "user@example.com"}
+        sms_payload: Any = {"kind": "sms", "phone": "+12025550123"}
+        invalid_payload: Any = {"kind": "fax", "number": "123"}
+
+        assert dispatch(payload=email_payload) == "user@example.com"
+        assert dispatch(payload=sms_payload) == "+12025550123"
+
+        with pytest.raises(ValidationError):
+            dispatch(payload=invalid_payload)
+
+    def test_tool_rejects_invalid_validation_mode(self):
+        """Test invalid validation mode is rejected at decoration time."""
+
+        with pytest.raises(ValueError, match="validation_mode"):
+
+            @tool(description="Invalid mode", validation_mode="bad-mode")
+            def invalid_mode_tool(value: int) -> int:
+                return value
 
 
 class TestSchemaGeneration:

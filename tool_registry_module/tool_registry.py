@@ -39,6 +39,7 @@ from functools import wraps
 from typing import (
     Annotated,
     Any,
+    Literal,
     Union,
     get_args,
     get_origin,
@@ -46,11 +47,62 @@ from typing import (
     overload,
 )
 
-from pydantic import ValidationError, create_model
+from pydantic import ConfigDict, ValidationError, create_model, validate_call
 
 from .tool_context_type import _is_tool_context_param
 
 logger = logging.getLogger(__name__)
+
+_PARAM_VALIDATORS: dict[Any, Callable[[Any], Any]] = {}
+
+
+def _build_param_validator(
+    param_type: type, *, strict: bool = False
+) -> Callable[[Any], Any]:
+    """Build a cached single-parameter validator with Pydantic's validate_call."""
+
+    def _validator(value: Any) -> Any:
+        return value
+
+    _validator.__annotations__ = {"value": param_type, "return": Any}
+    config = ConfigDict(arbitrary_types_allowed=True, strict=strict)
+    return validate_call(config=config)(_validator)
+
+
+def _convert_parameter_pydantic(
+    param_type: type, param_value: Any, *, strict: bool = False
+) -> Any:
+    """Convert parameters using Pydantic-only semantics via validate_call."""
+    if param_value is None:
+        return param_value
+
+    origin = get_origin(param_type)
+    if origin is Annotated:
+        param_type = get_args(param_type)[0]
+
+    if param_type is Any:
+        return param_value
+
+    if get_origin(param_type) is None and not hasattr(param_type, "__args__"):
+        try:
+            if isinstance(param_value, param_type):
+                return param_value
+        except TypeError:
+            pass
+
+    cache_key: Any
+    try:
+        hash(param_type)
+        cache_key = (param_type, strict)
+    except TypeError:
+        cache_key = (repr(param_type), strict)
+
+    validator = _PARAM_VALIDATORS.get(cache_key)
+    if validator is None:
+        validator = _build_param_validator(param_type, strict=strict)
+        _PARAM_VALIDATORS[cache_key] = validator
+
+    return validator(param_value)
 
 
 def create_schema_from_signature(
@@ -162,21 +214,19 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
 
     args = getattr(param_type, "__args__", ())
     last_exception = None
+
     if origin is Union or isinstance(param_type, types.UnionType):
         for union_type in args:
             if union_type is type(None) and param_value is None:
                 return None
-            # Skip isinstance check for Any and parameterized generics
             if union_type is Any:
-                return param_value  # Any accepts all values
+                return param_value
             try:
                 if isinstance(param_value, union_type):
                     return param_value
             except TypeError:
-                # union_type is a parameterized generic, skip isinstance check
                 pass
 
-        last_exception = None
         for union_type in args:
             if union_type is type(None):
                 continue
@@ -197,6 +247,7 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
                 for item in param_value
             ]
         return param_value
+
     elif origin is dict:
         if len(args) == 2 and isinstance(param_value, dict):
             key_type, val_type = args
@@ -206,17 +257,7 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
                 ): _convert_parameter(param_type=val_type, param_value=v)
                 for k, v in param_value.items()
             }
-
-        # Only use isinstance for concrete types, not parameterized generics
-    if get_origin(param_type) is None and not hasattr(param_type, "__args__"):
-        if param_type is Any:
-            return param_value  # Any accepts all values
-        try:
-            if isinstance(param_value, param_type):
-                return param_value
-        except TypeError:
-            # Handle special forms that aren't valid isinstance targets
-            pass
+        return param_value
 
     if inspect.isclass(param_type) and issubclass(param_type, Enum):
         if isinstance(param_value, str):
@@ -232,24 +273,32 @@ def _convert_parameter(param_type: type, param_value: Any) -> Any:
                 )
         return param_value
 
-    basic_types = {int: int, float: float, str: str, bool: bool}
+    if param_type is Any:
+        return param_value
 
-    if param_type in basic_types:
+    if get_origin(param_type) is None and not hasattr(param_type, "__args__"):
         try:
-            return basic_types[param_type](param_value)
-        except (ValueError, TypeError) as e:
-            raise ValueError(
-                f"Cannot convert {param_value} to {param_type.__name__}: {e}"
-            )
-
-    if _is_pydantic_model(param_type):
-        # Only use isinstance for concrete types, not parameterized generics
-        if get_origin(param_type) is None and not hasattr(param_type, "__args__"):
             if isinstance(param_value, param_type):
                 return param_value
-        return param_type(**param_value)
+        except TypeError:
+            pass
 
-    return param_value
+    if param_type is str:
+        return str(param_value)
+
+    cache_key: Any
+    try:
+        hash(param_type)
+        cache_key = param_type
+    except TypeError:
+        cache_key = repr(param_type)
+
+    validator = _PARAM_VALIDATORS.get(cache_key)
+    if validator is None:
+        validator = _build_param_validator(param_type)
+        _PARAM_VALIDATORS[cache_key] = validator
+
+    return validator(param_value)
 
 
 @overload
@@ -262,6 +311,8 @@ def tool[T, **P](
     description: str | None = None,
     cache_control: Any | None = None,
     ignore_in_schema: list[str] | None = None,
+    validation_mode: Literal["compat", "pydantic"] = "compat",
+    strict_validation: bool = False,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
@@ -271,6 +322,8 @@ def tool[T, **P](
     description: str | None = None,
     cache_control: Any | None = None,
     ignore_in_schema: list[str] | None = None,
+    validation_mode: Literal["compat", "pydantic"] = "compat",
+    strict_validation: bool = False,
 ) -> Callable[[Callable[P, T]], Callable[P, T]] | Callable[P, T]:
     """
     Decorator that converts a Python function into an AI provider tool.
@@ -285,6 +338,10 @@ def tool[T, **P](
         cache_control: Optional cache control settings (supported by some providers)
         ignore_in_schema: List of parameter names to exclude from the generated schema.
                          Useful for internal parameters like context or configuration.
+        validation_mode: Validation behavior for runtime argument handling.
+                        "compat" preserves current permissive behavior.
+                        "pydantic" uses direct Pydantic semantics via validate_call.
+        strict_validation: Enables Pydantic strict mode when validation_mode="pydantic".
 
     Returns:
         A decorator function that wraps the original function with tool capabilities
@@ -313,6 +370,9 @@ def tool[T, **P](
     """
     if ignore_in_schema is None:
         ignore_in_schema = []
+
+    if validation_mode not in {"compat", "pydantic"}:
+        raise ValueError("validation_mode must be either 'compat' or 'pydantic'")
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         logger.info(f"Registering tool: {func.__name__}")
@@ -359,9 +419,16 @@ def tool[T, **P](
                 ):
                     converted_kwargs[param_name] = param_value
                 else:
-                    converted_kwargs[param_name] = _convert_parameter(
-                        param_type=param_type, param_value=param_value
-                    )
+                    if validation_mode == "pydantic":
+                        converted_kwargs[param_name] = _convert_parameter_pydantic(
+                            param_type=param_type,
+                            param_value=param_value,
+                            strict=strict_validation,
+                        )
+                    else:
+                        converted_kwargs[param_name] = _convert_parameter(
+                            param_type=param_type, param_value=param_value
+                        )
 
             return func(**converted_kwargs)
 
@@ -373,6 +440,8 @@ def tool[T, **P](
         setattr(wrapper, "_input_schema", input_schema)
         setattr(wrapper, "_original_func", func)
         setattr(wrapper, "_ignore_in_schema", ignore_in_schema)
+        setattr(wrapper, "_validation_mode", validation_mode)
+        setattr(wrapper, "_strict_validation", strict_validation)
 
         logger.info(f"Successfully registered tool: {func.__name__}")
         return wrapper

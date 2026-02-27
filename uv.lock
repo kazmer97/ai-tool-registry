@@ -8,7 +8,6 @@ resolution-markers = [
 
 [[package]]
 name = "ai-tool-registry"
-version = "0.7.6"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -60,7 +59,7 @@ requires-dist = [
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
-provides-extras = ["anthropic", "openai", "mistral", "bedrock", "gemini", "all"]
+provides-extras = ["all", "anthropic", "bedrock", "gemini", "mistral", "openai"]
 
 [package.metadata.requires-dev]
 dev = [

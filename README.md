@@ -251,6 +251,37 @@ def calculate_area(length: float, width: float, debug_mode: bool = False, contex
     return length * width
 ```
 
+### Validation Modes
+
+By default, tools use `validation_mode="compat"` to preserve permissive behavior from earlier versions (for example enum name fallback and string coercions).
+
+You can opt into direct Pydantic runtime semantics with `validation_mode="pydantic"`:
+
+```python
+@tool(
+    description="Set task priority",
+    validation_mode="pydantic",
+)
+def set_priority(priority: Priority) -> str:
+    return priority.value
+```
+
+To enforce strict Pydantic validation rules, enable `strict_validation=True`:
+
+```python
+@tool(
+    description="Strict integer input",
+    validation_mode="pydantic",
+    strict_validation=True,
+)
+def increment(value: int) -> int:
+    return value + 1
+```
+
+### Validation Performance Note
+
+Pydantic validators are compiled once per parameter type and cached for reuse. This avoids rebuilding `@validate_call` wrappers on every tool call and keeps runtime overhead predictable in hot paths.
+
 ### Cache Control (Anthropic)
 
 Add cache control for better performance with Anthropic:
